@@ -1,0 +1,229 @@
+name: Issue Auto Process
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  process-issue-images:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: issue-${{ github.event.issue.number }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Parse issue images
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.issue?.body || "";
+            const markdown = [...body.matchAll(/!\[[^\]]*]\((https?:\/\/[^)\s]+)\)/gi)].map(m => m[1]);
+            const html = [...body.matchAll(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/gi)].map(m => m[1]);
+            const urls = [...new Set([...markdown, ...html])];
+            core.setOutput("has_images", urls.length > 0 ? "true" : "false");
+            core.setOutput("urls_json", JSON.stringify(urls));
+
+      - name: Ensure and set pending label
+        if: steps.parse.outputs.has_images == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = context.payload.issue.number;
+            const pending = "pending";
+
+            async function ensureLabel(name, color, description) {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name });
+              } catch (error) {
+                if (error.status === 404) {
+                  await github.rest.issues.createLabel({ owner, repo, name, color, description });
+                } else {
+                  throw error;
+                }
+              }
+            }
+
+            await ensureLabel(pending, "fbca04", "Issue is being processed");
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number,
+              labels: [pending],
+            });
+
+      - name: Setup Python
+        if: steps.parse.outputs.has_images == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        if: steps.parse.outputs.has_images == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install opencv-python numpy
+
+      - name: Run issue image pipeline
+        if: steps.parse.outputs.has_images == 'true'
+        env:
+          URLS_JSON: ${{ steps.parse.outputs.urls_json }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          jq -r '.issue.body // ""' "$GITHUB_EVENT_PATH" > issue_body.txt
+          python scripts/issue_worker.py \
+            --issue-body-file issue_body.txt \
+            --issue-number "$ISSUE_NUMBER" \
+            --output-dir issue_work \
+            --urls-json "$URLS_JSON"
+
+      - name: Publish processed images to issue-results branch
+        if: steps.parse.outputs.has_images == 'true'
+        id: publish
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cp issue_work/manifest.json "$RUNNER_TEMP/manifest.json"
+          mkdir -p "$RUNNER_TEMP/results"
+          cp issue_work/results/*.png "$RUNNER_TEMP/results/" 2>/dev/null || true
+
+          git fetch origin issue-results:issue-results || true
+          if git show-ref --verify --quiet refs/heads/issue-results; then
+            git checkout issue-results
+          else
+            git checkout --orphan issue-results
+            git rm -rf . >/dev/null 2>&1 || true
+          fi
+
+          RESULT_DIR="processed/issue-${ISSUE_NUMBER}/run-${RUN_ID}"
+          mkdir -p "$RESULT_DIR"
+          cp "$RUNNER_TEMP/manifest.json" "$RESULT_DIR/manifest.json"
+          cp "$RUNNER_TEMP/results/"*.png "$RESULT_DIR/" 2>/dev/null || true
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$RESULT_DIR"
+          if git diff --cached --quiet; then
+            echo "No files to commit."
+          else
+            git commit -m "issue ${ISSUE_NUMBER}: processed images (run ${RUN_ID})"
+            git push origin issue-results
+          fi
+
+          RAW_BASE="https://raw.githubusercontent.com/${REPO}/issue-results/${RESULT_DIR}"
+          echo "result_dir=${RESULT_DIR}" >> "$GITHUB_OUTPUT"
+          echo "raw_base=${RAW_BASE}" >> "$GITHUB_OUTPUT"
+
+      - name: Build issue reply content
+        if: steps.parse.outputs.has_images == 'true'
+        env:
+          RAW_BASE: ${{ steps.publish.outputs.raw_base }}
+          RESULT_DIR: ${{ steps.publish.outputs.result_dir }}
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          import os
+          manifest = json.loads(Path(os.environ["RESULT_DIR"]).joinpath("manifest.json").read_text(encoding="utf-8"))
+          raw_base = os.environ["RAW_BASE"]
+
+          lines = []
+          lines.append("自动处理完成 ✅")
+          lines.append("")
+          lines.append(f"- 检测到图片数：{manifest['total_images']}")
+          lines.append(f"- 成功处理数：{manifest['processed_images']}")
+          lines.append("")
+          lines.append("### TaskList")
+          for item in manifest["items"]:
+            mark = "x" if item["status"] == "ok" else " "
+            lines.append(f"- [{mark}] Image {item['index']} - {item['status']}")
+
+          lines.append("")
+          lines.append("### 处理结果")
+          has_ok = False
+          for item in manifest["items"]:
+            if item["status"] != "ok":
+              continue
+            has_ok = True
+            index = item["index"]
+            url = f"{raw_base}/output_{index}.png"
+            lines.append(f"#### Image {index}")
+            lines.append(f"![output_{index}]({url})")
+            lines.append("")
+
+          if not has_ok:
+            lines.append("本次没有成功处理的图片。")
+
+          Path("issue_comment.md").write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+          PY
+
+      - name: Reply to issue
+        if: steps.parse.outputs.has_images == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const body = fs.readFileSync("issue_comment.md", "utf8");
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body
+            });
+
+      - name: Set completed label
+        if: steps.parse.outputs.has_images == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = context.payload.issue.number;
+            const pending = "pending";
+            const completed = "completed";
+
+            async function ensureLabel(name, color, description) {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name });
+              } catch (error) {
+                if (error.status === 404) {
+                  await github.rest.issues.createLabel({ owner, repo, name, color, description });
+                } else {
+                  throw error;
+                }
+              }
+            }
+
+            await ensureLabel(completed, "0e8a16", "Issue processing completed");
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number,
+              labels: [completed],
+            });
+
+            try {
+              await github.rest.issues.removeLabel({
+                owner,
+                repo,
+                issue_number,
+                name: pending,
+              });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
