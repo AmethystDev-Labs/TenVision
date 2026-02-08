@@ -43,25 +43,26 @@ jobs:
             const issue_number = context.payload.issue.number;
             const pending = "pending";
 
-            async function ensureLabel(name, color, description) {
-              try {
-                await github.rest.issues.getLabel({ owner, repo, name });
-              } catch (error) {
-                if (error.status === 404) {
-                  await github.rest.issues.createLabel({ owner, repo, name, color, description });
-                } else {
-                  throw error;
-                }
+            // Get all labels to avoid case-sensitivity issues and robustly check existence
+            const { data: repoLabels } = await github.rest.issues.listLabelsForRepo({ owner, repo });
+
+            async function ensureAndAddLabel(name, color, description) {
+              const existingLabel = repoLabels.find(l => l.name.toLowerCase() === name.toLowerCase());
+              const labelName = existingLabel ? existingLabel.name : name;
+
+              if (!existingLabel) {
+                await github.rest.issues.createLabel({ owner, repo, name, color, description });
               }
+
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number,
+                labels: [labelName],
+              });
             }
 
-            await ensureLabel(pending, "fbca04", "Issue is being processed");
-            await github.rest.issues.addLabels({
-              owner,
-              repo,
-              issue_number,
-              labels: [pending],
-            });
+            await ensureAndAddLabel(pending, "fbca04", "Issue is being processed");
 
       - name: Setup Python
         if: steps.parse.outputs.has_images == 'true'
@@ -197,33 +198,37 @@ jobs:
             const pending = "pending";
             const completed = "completed";
 
-            async function ensureLabel(name, color, description) {
-              try {
-                await github.rest.issues.getLabel({ owner, repo, name });
-              } catch (error) {
-                if (error.status === 404) {
-                  await github.rest.issues.createLabel({ owner, repo, name, color, description });
-                } else {
-                  throw error;
-                }
+            // Get all labels to avoid case-sensitivity issues and robustly check existence
+            const { data: repoLabels } = await github.rest.issues.listLabelsForRepo({ owner, repo });
+            
+            async function ensureAndAddLabel(name, color, description) {
+              const existingLabel = repoLabels.find(l => l.name.toLowerCase() === name.toLowerCase());
+              const labelName = existingLabel ? existingLabel.name : name;
+
+              if (!existingLabel) {
+                await github.rest.issues.createLabel({ owner, repo, name, color, description });
               }
-            }
 
-            await ensureLabel(completed, "0e8a16", "Issue processing completed");
-            await github.rest.issues.addLabels({
-              owner,
-              repo,
-              issue_number,
-              labels: [completed],
-            });
-
-            try {
-              await github.rest.issues.removeLabel({
+              await github.rest.issues.addLabels({
                 owner,
                 repo,
                 issue_number,
-                name: pending,
+                labels: [labelName],
               });
+            }
+
+            await ensureAndAddLabel(completed, "0e8a16", "Issue processing completed");
+
+            try {
+              const existingPending = repoLabels.find(l => l.name.toLowerCase() === pending.toLowerCase());
+              if (existingPending) {
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number,
+                  name: existingPending.name,
+                });
+              }
             } catch (error) {
               if (error.status !== 404) throw error;
             }
