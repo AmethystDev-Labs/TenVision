@@ -1,0 +1,15 @@
+{
+  "issue_number": "1",
+  "total_images": 1,
+  "processed_images": 1,
+  "items": [
+    {
+      "index": 1,
+      "url": "https://github.com/user-attachments/assets/186f67c3-39c2-41a1-9aba-f1c8888821f7",
+      "status": "ok",
+      "input": "issue_work/inputs/input_1.png",
+      "output": "issue_work/results/output_1.png",
+      "log": "点击顺序坐标: [(292, 113), (393, 215), (143, 360)]\n候选数: 7\n已保存: issue_work/results/output_1.png"
+    }
+  ]
+}
