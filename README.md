@@ -21,6 +21,12 @@
 > [腾讯云图形点选验证码](https://cloud.tencent.com/product/captcha)
 > <img width="2160" height="1226" alt="image" src="https://github.com/user-attachments/assets/417cfbde-bdc2-42b9-939b-48d93ecd7d5e" />
 
+| 正确截图 | 错误截图 |
+| --- | --- |
+| <img width="451" height="451" alt="image" src="https://github.com/user-attachments/assets/61a84683-37e4-429e-b262-85c537c83a0c" /> | <img width="451" height="399" alt="image" src="https://github.com/user-attachments/assets/e28668db-af6e-4af7-bf91-f10ded0897bc" /> |
+
+
+
 
 ---
 
@@ -49,3 +55,4 @@ python main.py <输入的图片> <输出的图片位置>
 ---
 
 ## ⚖️ 本项目使用MIT许可证
+
