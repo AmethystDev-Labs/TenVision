@@ -1,0 +1,15 @@
+{
+  "issue_number": "9",
+  "total_images": 1,
+  "processed_images": 0,
+  "items": [
+    {
+      "index": 1,
+      "url": "https://github.com/user-attachments/assets/2dc77574-a844-46f2-8d85-fc88ca8d6c41",
+      "status": "failed",
+      "input": "issue_work/inputs/input_1.png",
+      "output": "issue_work/results/output_1.png",
+      "log": "Traceback (most recent call last):\n  File \"/home/runner/work/TenVision/TenVision/main.py\", line 134, in <module>\n    raise RuntimeError(\"没有找到顶部题目灰框，请调 gray_mask 阈值。\")\nRuntimeError: 没有找到顶部题目灰框，请调 gray_mask 阈值。"
+    }
+  ]
+}
